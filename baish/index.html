@@ -122,6 +122,38 @@
             height: 500px;
             background: #f0f5ff;
             overflow: hidden;
+            touch-action: none;
+        }
+        
+        .zoom-controls {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        .zoom-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid #e0e6ef;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .zoom-btn:hover {
+            background: #4a90e2;
+            color: white;
+            transform: scale(1.1);
         }
         
         .floor-plan {
@@ -133,6 +165,8 @@
             display: none;
             background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><rect width="100" height="100" fill="none" stroke="%23e0e6ef" stroke-width="0.5"/></svg>') no-repeat;
             background-size: 50px 50px;
+            transform-origin: center;
+            touch-action: none;
         }
         
         .floor-plan.active {
@@ -171,6 +205,24 @@
             border-left: 5px solid transparent;
             border-right: 5px solid transparent;
             border-top: 5px solid #e0e6ef;
+        }
+        
+        .route {
+            position: absolute;
+            background: linear-gradient(to right, #ff6b6b, #ff8e8e);
+            height: 4px;
+            z-index: 8;
+            transform-origin: left top;
+            pointer-events: none;
+        }
+        
+        .route-point {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: #ff6b6b;
+            border-radius: 50%;
+            z-index: 10;
         }
         
         .legend {
@@ -253,11 +305,6 @@
             transform: rotate(180deg);
         }
         
-        .highlight {
-            color: #ff6b6b;
-            font-weight: 700;
-        }
-        
         .footer {
             text-align: center;
             margin-top: 30px;
@@ -309,6 +356,12 @@
     <div class="map-container">
         <div class="map-title">一层（地面层）</div>
         <div class="map-content">
+            <div class="zoom-controls">
+                <div class="zoom-btn" id="zoom-in">+</div>
+                <div class="zoom-btn" id="zoom-out">-</div>
+                <div class="zoom-btn" id="reset-zoom">0</div>
+            </div>
+            
             <div class="floor-plan active" id="floor-1">
                 <!-- 一层区域 -->
                 <div class="area" style="top: 120px; left: 150px;">收银台</div>
@@ -323,6 +376,11 @@
                 <div class="area" style="top: 100px; left: 600px;">ATM机</div>
                 <div class="area" style="top: 350px; left: 350px;">电梯</div>
                 <div class="area" style="top: 40px; left: 200px;">入口</div>
+                
+                <!-- 路线图 -->
+                <div class="route" style="top: 40px; left: 200px; width: 350px; transform: rotate(15deg);"></div>
+                <div class="route-point" style="top: 40px; left: 200px;"></div>
+                <div class="route-point" style="top: 350px; left: 350px;"></div>
             </div>
             
             <div class="floor-plan" id="floor-b1">
@@ -444,6 +502,125 @@
                     }
                 });
             }
+            
+            // 缩放功能
+            let scaleFactor = 1;
+            let offsetX = 0;
+            let offsetY = 0;
+            let isDragging = false;
+            let startTouchX = 0;
+            let startTouchY = 0;
+            let startScale = 1;
+            let startOffsetX = 0;
+            let startOffsetY = 0;
+            
+            const mapContent = document.querySelector('.map-content');
+            const floorPlan = document.querySelector('.floor-plan.active');
+            
+            // 缩放按钮事件
+            document.getElementById('zoom-in').addEventListener('click', () => {
+                if (scaleFactor < 2) {
+                    scaleFactor += 0.2;
+                    updateTransform();
+                }
+            });
+            
+            document.getElementById('zoom-out').addEventListener('click', () => {
+                if (scaleFactor > 0.5) {
+                    scaleFactor -= 0.2;
+                    updateTransform();
+                }
+            });
+            
+            document.getElementById('reset-zoom').addEventListener('click', () => {
+                scaleFactor = 1;
+                offsetX = 0;
+                offsetY = 0;
+                updateTransform();
+            });
+            
+            // 更新缩放和偏移
+            function updateTransform() {
+                const transform = `scale(${scaleFactor}) translate(${offsetX}px, ${offsetY}px)`;
+                floorPlan.style.transform = transform;
+            }
+            
+            // 拖拽功能
+            mapContent.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 1) {
+                    isDragging = true;
+                    startTouchX = e.touches[0].clientX;
+                    startTouchY = e.touches[0].clientY;
+                    startOffsetX = offsetX;
+                    startOffsetY = offsetY;
+                }
+            }, { passive: true });
+            
+            mapContent.addEventListener('touchmove', (e) => {
+                if (isDragging && e.touches.length === 1) {
+                    e.preventDefault();
+                    const touchX = e.touches[0].clientX;
+                    const touchY = e.touches[0].clientY;
+                    
+                    offsetX = startOffsetX + (touchX - startTouchX);
+                    offsetY = startOffsetY + (touchY - startTouchY);
+                    
+                    updateTransform();
+                }
+            }, { passive: false });
+            
+            mapContent.addEventListener('touchend', () => {
+                isDragging = false;
+            });
+            
+            // 双指缩放
+            let initialScale = 1;
+            let initialDistance = 0;
+            
+            mapContent.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 2) {
+                    e.preventDefault();
+                    const touch1 = e.touches[0];
+                    const touch2 = e.touches[1];
+                    
+                    initialScale = scaleFactor;
+                    initialDistance = Math.hypot(
+                        touch2.clientX - touch1.clientX,
+                        touch2.clientY - touch1.clientY
+                    );
+                }
+            }, { passive: false });
+            
+            mapContent.addEventListener('touchmove', (e) => {
+                if (e.touches.length === 2) {
+                    e.preventDefault();
+                    const touch1 = e.touches[0];
+                    const touch2 = e.touches[1];
+                    
+                    const currentDistance = Math.hypot(
+                        touch2.clientX - touch1.clientX,
+                        touch2.clientY - touch1.clientY
+                    );
+                    
+                    const scale = initialScale * (currentDistance / initialDistance);
+                    
+                    if (scale >= 0.5 && scale <= 2) {
+                        scaleFactor = scale;
+                        updateTransform();
+                    }
+                }
+            }, { passive: false });
+            
+            // 初始缩放
+            updateTransform();
+            
+            // 路线图点击事件
+            document.querySelectorAll('.route-point').forEach(point => {
+                point.addEventListener('click', function() {
+                    const pointName = this.closest('.route').dataset.pointName || '路线点';
+                    alert(`您已选择路线点: ${pointName}`);
+                });
+            });
         });
     </script>
 </body>
