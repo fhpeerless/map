@@ -1,324 +1,341 @@
-// 等待DOM加载完成后执行
 document.addEventListener('DOMContentLoaded', () => {
-  // 获取Canvas元素和上下文
-  const canvas = document.getElementById('mapCanvas');
-  const ctx = canvas.getContext('2d');
-  
-  // 设置Canvas实际尺寸（解决模糊问题）
-  canvas.width = 1000;
-  canvas.height = 700;
+  // ===== 初始化Three.js核心组件 =====
+  const scene = new THREE.Scene();
+  const camera = new THREE.OrthographicCamera(
+    -600, 600, 400, -400, // 正交相机（适合2.5D地图）
+    0.1, 2000
+  );
+  camera.position.set(0, 0, 500); // 相机位置（俯视角度）
+  camera.lookAt(0, 0, 0);
 
-  // 全局状态
-  let currentFloor = 'outdoor'; // 当前楼层：outdoor,1,-1,-2
-  let scale = 1; // 缩放比例
-  let offsetX = 0; // 平移X偏移
-  let offsetY = 0; // 平移Y偏移
-  let isDragging = false;
-  let lastX, lastY;
+  // 渲染器
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(1200, 800);
+  renderer.shadowMap.enabled = true; // 启用阴影
+  document.getElementById('mapRenderer').appendChild(renderer.domElement);
 
-  // 店铺数据结构（示例，每层60家，这里简化为自动生成）
+  // 轨道控制器（支持缩放、平移、旋转）
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableRotate = false; // 禁用旋转（保持俯视）
+  controls.enableZoom = true; // 启用缩放
+  controls.enablePan = true; // 启用平移
+  controls.zoomSpeed = 0.5;
+  controls.panSpeed = 0.5;
+
+  // 光源（增强3D效果）
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  scene.add(ambientLight);
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  directionalLight.position.set(500, 500, 800);
+  directionalLight.castShadow = true;
+  scene.add(directionalLight);
+
+  // ===== 全局状态 =====
+  let currentFloor = 'outdoor';
+  const floorGroups = {
+    outdoor: new THREE.Group(), // 室外场景组
+    1: new THREE.Group(),      // 1层场景组
+    '-1': new THREE.Group(),   // 负1层场景组
+    '-2': new THREE.Group()    // 负2层场景组
+  };
+  // 将所有楼层组添加到场景
+  Object.values(floorGroups).forEach(group => scene.add(group));
+
+  // ===== 数据定义 =====
+  // 楼层数据（包含店铺、楼梯、扶梯）
   const floorData = {
-    outdoor: {
-      name: '室外',
-      shops: [], // 室外无店铺
-      walls: [],
-      passages: [[100, 350, 800, 350]] // 主通道
-    },
     1: {
-      name: '1层',
-      shops: generateShops(60, 100, 100, 800, 500), // 生成60家店铺
-      walls: [
-        [100, 100, 800, 100], // 上边界
-        [800, 100, 800, 600], // 右边界
-        [100, 600, 800, 600], // 下边界
-        [100, 100, 100, 600]  // 左边界
+      shops: generateShops(60, -500, -300, 500, 300, 0), // 店铺（x范围, y范围, z高度）
+      stairs: [
+        { x: -200, y: 0, width: 40, depth: 40, height: 10 } // 楼梯位置和尺寸
       ],
-      passages: [
-        [100, 350, 800, 350], // 主通道
-        [450, 100, 450, 600]  // 垂直通道
+      escalators: [
+        { x: 200, y: 0, width: 50, depth: 60, height: 8 } // 扶梯位置和尺寸
       ]
     },
     '-1': {
-      name: '负1层',
-      shops: generateShops(60, 100, 100, 800, 500),
-      walls: [
-        [100, 100, 800, 100],
-        [800, 100, 800, 600],
-        [100, 600, 800, 600],
-        [100, 100, 100, 600]
+      shops: generateShops(60, -500, -300, 500, 300, -100), // z=-100区分楼层
+      stairs: [
+        { x: -200, y: 0, width: 40, depth: 40, height: 10 }
       ],
-      passages: [
-        [100, 250, 800, 250],
-        [100, 450, 800, 450],
-        [300, 100, 300, 600],
-        [700, 100, 700, 600]
+      escalators: [
+        { x: 200, y: 0, width: 50, depth: 60, height: 8 }
       ]
     },
     '-2': {
-      name: '负2层',
-      shops: generateShops(60, 100, 100, 800, 500),
-      walls: [
-        [100, 100, 800, 100],
-        [800, 100, 800, 600],
-        [100, 600, 800, 600],
-        [100, 100, 100, 600]
+      shops: generateShops(60, -500, -300, 500, 300, -200), // z=-200区分楼层
+      stairs: [
+        { x: -200, y: 0, width: 40, depth: 40, height: 10 }
       ],
-      passages: [
-        [200, 350, 700, 350],
-        [450, 200, 450, 500]
+      escalators: [
+        { x: 200, y: 0, width: 50, depth: 60, height: 8 }
       ]
     }
   };
 
-  // 生成店铺数据（数量，区域范围）
-  function generateShops(count, minX, minY, maxX, maxY) {
+  // ===== 生成店铺数据 =====
+  function generateShops(count, minX, minY, maxX, maxY, z) {
     const shops = [];
-    const shopWidth = 50;
-    const shopHeight = 40;
-    let x = minX + 20;
-    let y = minY + 20;
-    
+    const shopWidth = 40;
+    const shopDepth = 30;
+    let x = minX + 30;
+    let y = minY + 30;
+
     for (let i = 1; i <= count; i++) {
-      // 自动排列店铺（可根据实际布局修改坐标）
       shops.push({
         id: `${currentFloor}-${i}`,
         name: `店铺${i}`,
         x,
         y,
+        z,
         width: shopWidth,
-        height: shopHeight,
-        color: `hsl(${i * 5}, 70%, 80%)` // 不同颜色区分
+        depth: shopDepth,
+        color: `hsl(${i * 6}, 70%, 60%)`
       });
-      
+
       x += shopWidth + 10;
       if (x + shopWidth > maxX) {
-        x = minX + 20;
-        y += shopHeight + 10;
-        if (y + shopHeight > maxY) y = minY + 20; // 超出范围换行
+        x = minX + 30;
+        y += shopDepth + 10;
+        if (y + shopDepth > maxY) y = minY + 30;
       }
     }
     return shops;
   }
 
-  // 绘制3D拱形地铁口（室外区域）
-  function drawSubwayEntrance() {
-    ctx.save();
-    ctx.translate(offsetX, offsetY);
-    ctx.scale(scale, scale);
-    
-    // 拱形基础（3D效果通过阴影和渐变实现）
-    const centerX = 500;
-    const centerY = 350;
-    const width = 150;
-    const height = 100;
-    
-    // 底部矩形
-    ctx.fillStyle = '#888';
-    ctx.fillRect(centerX - width/2, centerY, width, 30);
-    
-    // 拱形顶部（3D透视）
-    const gradient = ctx.createRadialGradient(
-      centerX, centerY, 0,
-      centerX, centerY, width/2
-    );
-    gradient.addColorStop(0, '#aaa');
-    gradient.addColorStop(1, '#666');
-    
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, width/2, Math.PI, 0, false); // 上半圆
-    ctx.fill();
-    
-    // 拱内阴影（增强3D感）
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, width/2 - 5, Math.PI, 0, false);
-    ctx.fill();
-    
-    // 地铁口文字
-    ctx.fillStyle = 'white';
-    ctx.font = 'bold 16px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText('地铁入口', centerX, centerY + 15);
-    
-    ctx.restore();
+  // ===== 3D模型创建函数 =====
+  // 创建3D商场入口（立体门框+门体）
+  function createEntrance() {
+    const entranceGroup = new THREE.Group();
+
+    // 门框（立方体）
+    const frameGeometry = new THREE.BoxGeometry(120, 10, 80); // 宽、高、深
+    const frameMaterial = new THREE.MeshPhongMaterial({ color: 0x8B4513 });
+    const frameTop = new THREE.Mesh(frameGeometry, frameMaterial);
+    frameTop.position.set(0, 50, 0); // 顶部门框
+    frameTop.castShadow = true;
+
+    const frameLeft = new THREE.Mesh(new THREE.BoxGeometry(10, 100, 80), frameMaterial);
+    frameLeft.position.set(-55, 0, 0); // 左侧门框
+    frameLeft.castShadow = true;
+
+    const frameRight = new THREE.Mesh(new THREE.BoxGeometry(10, 100, 80), frameMaterial);
+    frameRight.position.set(55, 0, 0); // 右侧门框
+    frameRight.castShadow = true;
+
+    // 门体（半透明玻璃）
+    const doorGeometry = new THREE.PlaneGeometry(100, 90);
+    const doorMaterial = new THREE.MeshBasicMaterial({
+      color: 0xadd8e6,
+      transparent: true,
+      opacity: 0.7
+    });
+    const door = new THREE.Mesh(doorGeometry, doorMaterial);
+    door.position.set(0, 0, 1); // 稍微靠前
+    door.rotation.y = Math.PI / 2; // 旋转平面朝向
+
+    entranceGroup.add(frameTop, frameLeft, frameRight, door);
+    entranceGroup.position.set(0, -200, 0); // 入口位置
+    return entranceGroup;
   }
 
-  // 绘制当前楼层地图
-  function drawMap() {
-    // 清空画布
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // 绘制室外区域
-    if (currentFloor === 'outdoor') {
-      // 室外地面
-      ctx.save();
-      ctx.translate(offsetX, offsetY);
-      ctx.scale(scale, scale);
-      ctx.fillStyle = '#e0f7fa';
-      ctx.fillRect(50, 50, 900, 600);
-      
-      // 道路
-      ctx.fillStyle = '#ccc';
-      ctx.fillRect(100, 320, 800, 60);
-      
-      // 商场入口
-      ctx.fillStyle = '#ffcc80';
-      ctx.fillRect(450, 50, 100, 50);
-      ctx.fillStyle = 'black';
-      ctx.font = '14px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('商场主入口', 500, 80);
-      ctx.restore();
-      
-      // 绘制3D地铁口
-      drawSubwayEntrance();
-      return;
+  // 创建楼梯（3D台阶）
+  function createStairs(data) {
+    const stairsGroup = new THREE.Group();
+    const { x, y, width, depth, height } = data;
+
+    // 台阶数量
+    const stepCount = 5;
+    const stepHeight = height / stepCount;
+    const stepDepth = depth / stepCount;
+
+    for (let i = 0; i < stepCount; i++) {
+      const stepGeometry = new THREE.BoxGeometry(width, stepHeight, depth - i * stepDepth);
+      const stepMaterial = new THREE.MeshPhongMaterial({ color: 0xcccccc });
+      const step = new THREE.Mesh(stepGeometry, stepMaterial);
+      step.position.set(
+        x,
+        y + i * stepHeight,
+        z + i * stepDepth / 2 // 逐步深入
+      );
+      step.castShadow = true;
+      stairsGroup.add(step);
     }
-    
-    // 绘制楼层（1层/-1层/-2层）
-    const data = floorData[currentFloor];
-    
-    ctx.save();
-    ctx.translate(offsetX, offsetY);
-    ctx.scale(scale, scale);
-    
-    // 绘制背景
-    ctx.fillStyle = '#f9f9f9';
-    ctx.fillRect(50, 50, 900, 600);
-    
-    // 绘制墙壁
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 3;
-    data.walls.forEach(wall => {
-      ctx.beginPath();
-      ctx.moveTo(wall[0], wall[1]);
-      ctx.lineTo(wall[2], wall[3]);
-      ctx.stroke();
-    });
-    
-    // 绘制通道
-    ctx.strokeStyle = '#999';
-    ctx.lineWidth = 2;
-    data.passages.forEach(passage => {
-      ctx.beginPath();
-      ctx.moveTo(passage[0], passage[1]);
-      ctx.lineTo(passage[2], passage[3]);
-      ctx.stroke();
-    });
-    
-    // 绘制店铺
-    data.shops.forEach(shop => {
-      ctx.fillStyle = shop.color;
-      ctx.fillRect(shop.x, shop.y, shop.width, shop.height);
-      ctx.strokeStyle = '#666';
-      ctx.strokeRect(shop.x, shop.y, shop.width, shop.height);
-      
-      // 店铺编号（简化显示）
-      ctx.fillStyle = '#333';
-      ctx.font = '10px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText(shop.id, shop.x + shop.width/2, shop.y + shop.height/2);
-    });
-    
-    // 楼层标识
-    ctx.fillStyle = '#333';
-    ctx.font = '20px Arial';
-    ctx.textAlign = 'left';
-    ctx.fillText(`${data.name}`, 60, 80);
-    
-    ctx.restore();
+
+    return stairsGroup;
   }
 
-  // 检查点击是否在店铺内
-  function checkShopClick(x, y) {
-    if (currentFloor === 'outdoor') return null;
-    
-    // 转换坐标（考虑缩放和平移）
-    const realX = (x - offsetX) / scale;
-    const realY = (y - offsetY) / scale;
-    
-    return floorData[currentFloor].shops.find(shop => 
-      realX >= shop.x && realX <= shop.x + shop.width &&
-      realY >= shop.y && realY <= shop.y + shop.height
+  // 创建扶梯（倾斜台阶+扶手）
+  function createEscalator(data) {
+    const escalatorGroup = new THREE.Group();
+    const { x, y, width, depth, height } = data;
+
+    // 扶梯台阶（倾斜）
+    const stepCount = 8;
+    const stepHeight = height / stepCount;
+    const stepDepth = depth / stepCount;
+
+    for (let i = 0; i < stepCount; i++) {
+      const stepGeometry = new THREE.BoxGeometry(width, stepHeight, stepDepth * 0.8);
+      const stepMaterial = new THREE.MeshPhongMaterial({ color: 0xffd700 });
+      const step = new THREE.Mesh(stepGeometry, stepMaterial);
+      step.position.set(
+        x,
+        y + i * stepHeight,
+        z + i * stepDepth
+      );
+      step.castShadow = true;
+      escalatorGroup.add(step);
+    }
+
+    // 扶手
+    const handrailGeometry = new THREE.BoxGeometry(5, height + 10, depth);
+    const handrailMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+    const handrailLeft = new THREE.Mesh(handrailGeometry, handrailMaterial);
+    handrailLeft.position.set(x - width/2 - 5, y + height/2, z + depth/2);
+    const handrailRight = new THREE.Mesh(handrailGeometry, handrailMaterial);
+    handrailRight.position.set(x + width/2 + 5, y + height/2, z + depth/2);
+    escalatorGroup.add(handrailLeft, handrailRight);
+
+    return escalatorGroup;
+  }
+
+  // 创建店铺（2.5D平面+边框）
+  function createShop(shop) {
+    const shopGroup = new THREE.Group();
+
+    // 店铺地面
+    const shopGeometry = new THREE.BoxGeometry(shop.width, 1, shop.depth);
+    const shopMaterial = new THREE.MeshPhongMaterial({ color: shop.color });
+    const shopBase = new THREE.Mesh(shopGeometry, shopMaterial);
+    shopBase.position.set(shop.x, shop.y, shop.z);
+    shopBase.receiveShadow = true;
+
+    // 店铺边框（增强立体感）
+    const borderGeometry = new THREE.BoxGeometry(shop.width + 2, 3, shop.depth + 2);
+    const borderMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+    const border = new THREE.Mesh(borderGeometry, borderMaterial);
+    border.position.set(shop.x, shop.y, shop.z - 1); // 稍微靠下
+    shopGroup.add(border, shopBase);
+
+    // 存储店铺数据（用于点击交互）
+    shopGroup.userData = { type: 'shop', ...shop };
+    return shopGroup;
+  }
+
+  // 创建楼层地面
+  function createFloor(z, color) {
+    const floorGeometry = new THREE.PlaneGeometry(1200, 800);
+    const floorMaterial = new THREE.MeshPhongMaterial({ color, side: THREE.DoubleSide });
+    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    floor.rotation.x = Math.PI / 2; // 旋转为水平面
+    floor.position.z = z;
+    floor.receiveShadow = true;
+    return floor;
+  }
+
+  // ===== 初始化场景 =====
+  function initScenes() {
+    // 1. 室外场景
+    const outdoorFloor = createFloor(0, 0xe0f7fa); // 室外地面
+    const road = new THREE.Mesh(
+      new THREE.PlaneGeometry(1000, 100),
+      new THREE.MeshPhongMaterial({ color: 0xcccccc, side: THREE.DoubleSide })
     );
+    road.rotation.x = Math.PI / 2;
+    road.position.set(0, 0, 1); // 略高于地面
+    const entrance = createEntrance(); // 3D入口
+    floorGroups.outdoor.add(outdoorFloor, road, entrance);
+
+    // 2. 室内楼层（1层/-1层/-2层）
+    Object.keys(floorData).forEach(floor => {
+      const z = parseInt(floor) === 1 ? 0 : parseInt(floor) * 100; // 楼层高度区分
+      const floorMesh = createFloor(z, 0xf9f9f9); // 室内地面
+      floorGroups[floor].add(floorMesh);
+
+      // 添加店铺
+      floorData[floor].shops.forEach(shop => {
+        floorGroups[floor].add(createShop(shop));
+      });
+
+      // 添加楼梯
+      floorData[floor].stairs.forEach(stair => {
+        const stairMesh = createStairs({ ...stair, z });
+        floorGroups[floor].add(stairMesh);
+      });
+
+      // 添加扶梯
+      floorData[floor].escalators.forEach(escalator => {
+        const escalatorMesh = createEscalator({ ...escalator, z });
+        floorGroups[floor].add(escalatorMesh);
+      });
+    });
+
+    // 默认隐藏非室外楼层
+    Object.keys(floorGroups).forEach(floor => {
+      floorGroups[floor].visible = floor === floor === 'outdoor';
+    });
   }
 
-  // 事件监听：楼层切换
+  // ===== 交互逻辑 =====
+  // 楼层切换
   document.querySelectorAll('.floor-btn').forEach(btn => {
     btn.addEventListener('click', () => {
+      const floor = btn.dataset.floor;
+      currentFloor = floor;
+      // 显示当前楼层，隐藏其他楼层
+      Object.keys(floorGroups).forEach((group, key) => {
+        group.visible = key === floor;
+      });
+      // 更新信息面板
+      document.getElementById('currentFloor').textContent = 
+        floor === 'outdoor' ? '室外' : `${floor}层`;
+      document.getElementById('shopInfo').style.display = 'none';
+      // 高亮按钮
       document.querySelectorAll('.floor-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      currentFloor = btn.dataset.floor;
-      document.getElementById('currentFloor').textContent = floorData[currentFloor].name;
-      document.getElementById('shopInfo').style.display = 'none'; // 隐藏店铺信息
-      drawMap();
     });
   });
 
-  // 事件监听：鼠标点击（店铺交互）
-  canvas.addEventListener('click', (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    const shop = checkShopClick(x, y);
-    if (shop) {
-      document.getElementById('shopName').textContent = shop.name;
-      document.getElementById('shopId').textContent = shop.id;
-      document.getElementById('shopInfo').style.display = 'block';
-    } else {
-      document.getElementById('shopInfo').style.display = 'none';
+  // 点击店铺交互（射线检测）
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+
+  function onMouseClick(event) {
+    // 计算鼠标在标准化设备坐标中的位置
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    // 更新射线投射器
+    raycaster.setFromCamera(mouse, camera);
+    // 检测与所有物体的交集
+    const intersects = raycaster.intersectObjects(floorGroups[currentFloor].children, true);
+
+    if (intersects.length > 0) {
+      const target = intersects[0].object;
+      if (target.parent?.userData?.type === 'shop') {
+        const shop = target.parent.userData;
+        document.getElementById('shopName').textContent = shop.name;
+        document.getElementById('shopId').textContent = shop.id;
+        document.getElementById('shopInfo').style.display = 'block';
+      } else {
+        document.getElementById('shopInfo').style.display = 'none';
+      }
     }
-  });
+  }
 
-  // 事件监听：鼠标拖拽（平移地图）
-  canvas.addEventListener('mousedown', (e) => {
-    isDragging = true;
-    const rect = canvas.getBoundingClientRect();
-    lastX = e.clientX - rect.left;
-    lastY = e.clientY - rect.top;
-  });
+  // 绑定点击事件
+  renderer.domElement.addEventListener('click', onMouseClick);
 
-  canvas.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    offsetX += x - lastX;
-    offsetY += y - lastY;
-    lastX = x;
-    lastY = y;
-    drawMap();
-  });
+  // ===== 动画循环 =====
+  function animate() {
+    requestAnimationFrame(animate);
+    renderer.render(scene, camera);
+  }
 
-  window.addEventListener('mouseup', () => {
-    isDragging = false;
-  });
-
-  // 事件监听：鼠标滚轮（缩放地图）
-  canvas.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    
-    // 缩放中心点
-    const scaleFactor = e.deltaY < 0 ? 1.1 : 0.9;
-    
-    // 调整偏移量，使缩放围绕鼠标位置
-    offsetX = mouseX - (mouseX - offsetX) * scaleFactor;
-    offsetY = mouseY - (mouseY - offsetY) * scaleFactor;
-    
-    scale *= scaleFactor;
-    // 限制缩放范围
-    scale = Math.max(0.5, Math.min(3, scale));
-    
-    drawMap();
-  });
-
-  // 初始化
-  document.querySelector(`.floor-btn[data-floor="outdoor"]`).classList.add('active');
-  drawMap();
+  // ===== 初始化 =====
+  initScenes();
+  animate();
+  document.querySelector('.floor-btn[data-floor="outdoor"]').classList.add('active');
 });
