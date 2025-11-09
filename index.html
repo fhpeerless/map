@@ -3,19 +3,27 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>商场室内地图</title>
-  <!-- 引入CSS文件 -->
+  <title>3D商场地图</title>
   <link rel="stylesheet" href="./css/map.css">
+  <!-- 引入Three.js库（3D渲染核心） -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <!-- 引入轨道控制器（用于鼠标交互） -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
   <div class="map-container">
-    <canvas id="mapCanvas"></canvas>
+    <!-- Three.js渲染容器 -->
+    <div id="mapRenderer"></div>
+    
+    <!-- 控制区 -->
     <div class="controls">
       <button class="floor-btn" data-floor="outdoor">室外</button>
       <button class="floor-btn" data-floor="1">1层</button>
       <button class="floor-btn" data-floor="-1">负1层</button>
       <button class="floor-btn" data-floor="-2">负2层</button>
     </div>
+    
+    <!-- 信息面板 -->
     <div class="info-panel">
       <h3>当前楼层: <span id="currentFloor">室外</span></h3>
       <div class="shop-info" id="shopInfo">
@@ -25,7 +33,6 @@
     </div>
   </div>
 
-  <!-- 引入JS文件（放在body底部，确保DOM加载完成后执行） -->
   <script src="./js/map.js"></script>
 </body>
 </html>
